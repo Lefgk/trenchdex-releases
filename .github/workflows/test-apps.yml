@@ -1,0 +1,65 @@
+name: Test desktop apps
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows, runner: windows-latest, asset: "*win-x64.exe" }
+          - { os: linux, runner: ubuntu-latest, asset: "*linux-x86_64.AppImage" }
+          - { os: mac-intel, runner: macos-15-intel, asset: "*mac-x64.dmg" }
+    runs-on: ${{ matrix.runner }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm i --no-save --silent playwright-core@1.49.1
+      - name: Download + verify checksum
+        shell: bash
+        run: |
+          mkdir dl && cd dl
+          gh release download v1.0.0 -R ${{ github.repository }} -p "${{ matrix.asset }}" -p SHA256SUMS.txt
+          f=$(ls | grep -v SHA256SUMS)
+          grep " $f\$" SHA256SUMS.txt | (command -v sha256sum >/dev/null && sha256sum -c || shasum -a 256 -c)
+      - name: Install + launch (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dl\*.exe | Select-Object -First 1
+          Start-Process $exe.FullName -ArgumentList "/S" -Wait
+          $app = Get-ChildItem "$env:LOCALAPPDATA\Programs","$env:ProgramFiles" -Recurse -Filter "Trench DEX.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $app) { throw "installed app not found" }
+          Write-Host "installed at $($app.FullName)"
+          Start-Process $app.FullName -ArgumentList "--remote-debugging-port=9222"
+      - name: Launch (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb libnss3 libgbm1 libasound2t64 libgtk-3-0 >/dev/null
+          chmod +x dl/*.AppImage
+          nohup xvfb-run -a dl/*.AppImage --appimage-extract-and-run --no-sandbox --remote-debugging-port=9222 > app.log 2>&1 &
+      - name: Install + launch (macOS Intel)
+        if: matrix.os == 'mac-intel'
+        run: |
+          hdiutil attach dl/*.dmg -nobrowse -mountpoint /Volumes/TD >/dev/null
+          cp -R "/Volumes/TD/Trench DEX.app" /Applications/
+          file "/Applications/Trench DEX.app/Contents/MacOS/Trench DEX"
+          nohup "/Applications/Trench DEX.app/Contents/MacOS/Trench DEX" --remote-debugging-port=9222 > app.log 2>&1 &
+      - name: Check pages
+        shell: bash
+        run: |
+          mkdir shots
+          curl -sf http://127.0.0.1:37369/ -o /dev/null --retry 20 --retry-delay 3 --retry-all-errors && echo "local server OK"
+          node ci/check.mjs ${{ matrix.os }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shots-${{ matrix.os }}
+          path: |
+            shots/
+            app.log
+          if-no-files-found: ignore

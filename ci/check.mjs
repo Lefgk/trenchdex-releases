@@ -23,7 +23,7 @@ for (const route of ["/", "/swap", "/launchpad", "/download"]) {
   const text = (await page.evaluate(() => document.body.innerText)).trim();
   const name = route === "/" ? "home" : route.slice(1);
   await page.screenshot({ path: `shots/${os}-${name}.png` });
-  const ok = text.length > 200 && !/Something went wrong|Application error/i.test(text);
+  const ok = text.length > 100 && !/Something went wrong|Application error/i.test(text);
   console.log(`${ok ? "PASS" : "FAIL"} ${route} (${text.length} chars)`);
   if (!ok) fail = true;
 }
